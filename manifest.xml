@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   Manifest für das OneNote-Add-in "Antwort-Übersicht".
-  WICHTIG: Ersetze überall  https://DEIN-NAME.github.io/onenote-antworten
+  WICHTIG: Ersetze überall  https://JanoschKer.github.io/onenote-antworten
   durch die Adresse, unter der du die Dateien veröffentlichst (siehe README.md).
 -->
 <OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
@@ -15,15 +15,15 @@
   <DefaultLocale>de-DE</DefaultLocale>
   <DisplayName DefaultValue="Antwort-Übersicht"/>
   <Description DefaultValue="Zeigt die Antworten aller Schülerinnen und Schüler aus einem Antwortfeld einer verteilten Kursnotizbuch-Seite in einer Übersicht."/>
-  <IconUrl DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/assets/icon-32.png"/>
-  <HighResolutionIconUrl DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/assets/icon-80.png"/>
-  <SupportUrl DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/"/>
+  <IconUrl DefaultValue="https://JanoschKer.github.io/onenote-antworten/assets/icon-32.png"/>
+  <HighResolutionIconUrl DefaultValue="https://JanoschKer.github.io/onenote-antworten/assets/icon-80.png"/>
+  <SupportUrl DefaultValue="https://JanoschKer.github.io/onenote-antworten/"/>
   <AppDomains/>
   <Hosts>
     <Host Name="Notebook"/>
   </Hosts>
   <DefaultSettings>
-    <SourceLocation DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/taskpane.html"/>
+    <SourceLocation DefaultValue="https://JanoschKer.github.io/onenote-antworten/taskpane.html"/>
   </DefaultSettings>
   <Permissions>ReadDocument</Permissions>
 
@@ -64,12 +64,12 @@
     </Hosts>
     <Resources>
       <bt:Images>
-        <bt:Image id="Icon.16" DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/assets/icon-16.png"/>
-        <bt:Image id="Icon.32" DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/assets/icon-32.png"/>
-        <bt:Image id="Icon.80" DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/assets/icon-80.png"/>
+        <bt:Image id="Icon.16" DefaultValue="https://JanoschKer.github.io/onenote-antworten/assets/icon-16.png"/>
+        <bt:Image id="Icon.32" DefaultValue="https://JanoschKer.github.io/onenote-antworten/assets/icon-32.png"/>
+        <bt:Image id="Icon.80" DefaultValue="https://JanoschKer.github.io/onenote-antworten/assets/icon-80.png"/>
       </bt:Images>
       <bt:Urls>
-        <bt:Url id="Taskpane.Url" DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/taskpane.html"/>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://JanoschKer.github.io/onenote-antworten/taskpane.html"/>
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="Group.Label" DefaultValue="Antworten"/>

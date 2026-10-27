@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Antwort-Übersicht</title>
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <link rel="stylesheet" href="taskpane.css">
+</head>
+<body>
+  <header>
+    <h1>Antwort-Übersicht</h1>
+    <p class="hint">Öffne die verteilte Seite (z.&nbsp;B. in deiner eigenen Kopie oder bei einem Schüler) und klicke auf „Antworten laden“.</p>
+  </header>
+
+  <section class="controls">
+    <label for="marker">Erste Zeile des Antwortfelds</label>
+    <input id="marker" type="text" value="Answer:" autocomplete="off">
+    <button id="load" type="button">Antworten laden</button>
+    <label class="check"><input id="onlyMissing" type="checkbox"> Nur fehlende Antworten zeigen</label>
+  </section>
+
+  <div id="status" class="status" role="status" aria-live="polite"></div>
+  <div id="summary" class="summary"></div>
+  <main id="results" class="results"></main>
+
+  <script src="taskpane.js"></script>
+</body>
+</html>

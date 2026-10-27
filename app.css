@@ -1,0 +1,84 @@
+:root {
+  --bg: #f4f3f7;
+  --surface: #ffffff;
+  --fg: #1f1f24;
+  --muted: #5f5f6a;
+  --line: #dcdbe3;
+  --accent: #7719aa;
+  --accent-fg: #ffffff;
+  --ok: #1f7a3d;
+  --ok-bg: #e6f4ea;
+  --missing: #b3261e;
+  --missing-bg: #fdecea;
+  --warn: #8a5a00;
+  --warn-bg: #fff4d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17161c; --surface: #23222a; --fg: #ececf1; --muted: #a9a8b4; --line: #3a3944;
+    --accent: #b46be0; --accent-fg: #17161c;
+    --ok: #7fd49b; --ok-bg: #1d3325; --missing: #ff8a80; --missing-bg: #3a1f1d;
+    --warn: #f3c56b; --warn-bg: #3a3018;
+  }
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 16px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+  padding: 0 16px 32px;
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+}
+
+.top { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 0; flex-wrap: wrap; }
+h1 { margin: 0; font-size: 22px; color: var(--accent); }
+.user { font-size: 14px; color: var(--muted); display: flex; gap: 10px; align-items: center; }
+.user button { background: none; border: 1px solid var(--line); color: var(--fg); padding: 6px 10px; border-radius: 6px; font: inherit; font-size: 14px; }
+
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+.fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; }
+.fields label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+select, input[type="text"], input:not([type]) {
+  font: inherit; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-height: 44px; width: 100%;
+}
+.actions { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; margin-top: 12px; }
+.check { display: flex; align-items: center; gap: 6px; font-size: 15px; }
+.check input { width: 20px; height: 20px; }
+
+button.primary {
+  background: var(--accent); color: var(--accent-fg); border: 0; border-radius: 6px;
+  padding: 0 18px; min-height: 44px; font: inherit; font-weight: 600; cursor: pointer;
+}
+button:disabled { opacity: .55; cursor: default; }
+
+.status { color: var(--muted); font-size: 14px; min-height: 1.2em; margin: 4px 0 8px; }
+.status.error { color: var(--missing); font-weight: 600; }
+
+.summary { font-weight: 600; margin-bottom: 12px; }
+.summary .bar { height: 8px; background: var(--line); border-radius: 4px; margin-top: 6px; overflow: hidden; max-width: 480px; }
+.summary .bar span { display: block; height: 100%; background: var(--ok); }
+
+.results { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; }
+.card {
+  background: var(--surface); border: 1px solid var(--line); border-left: 5px solid var(--line);
+  border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0;
+}
+.card h2 { margin: 0; font-size: 16px; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.card h2 span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.answer { margin: 0; white-space: pre-wrap; word-break: break-word; }
+.note { font-size: 13px; color: var(--muted); }
+.card .links { margin-top: auto; display: flex; gap: 14px; font-size: 14px; }
+.card a { color: var(--accent); text-decoration: none; font-weight: 600; }
+.badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 10px; white-space: nowrap; }
+
+.card.ok { border-left-color: var(--ok); }
+.card.ok .badge { background: var(--ok-bg); color: var(--ok); }
+.card.leer { border-left-color: var(--missing); background: var(--missing-bg); }
+.card.leer .badge { background: var(--missing); color: var(--surface); }
+.card.kein-feld, .card.keine-seite { border-left-color: var(--warn); }
+.card.kein-feld .badge, .card.keine-seite .badge { background: var(--warn-bg); color: var(--warn); }
+
+.thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; }
+.thumbs img { width: 100%; max-height: 240px; object-fit: contain; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; display: block; }

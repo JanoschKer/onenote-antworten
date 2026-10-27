@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <title>Antwort-Übersicht</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Antwort-Übersicht</h1>
+    <div id="user" class="user"></div>
+  </header>
+
+  <!-- Anmeldung -->
+  <section id="loginView" class="panel" hidden>
+    <p>Melde dich mit deinem Schulkonto an, um die Antworten aus deinem Kursnotizbuch zu sehen.</p>
+    <button id="loginBtn" type="button" class="primary">Mit Microsoft anmelden</button>
+  </section>
+
+  <!-- Auswahl -->
+  <section id="setupView" class="panel" hidden>
+    <div class="fields">
+      <label>Ort
+        <select id="locationSel"></select>
+      </label>
+      <label>Kursnotizbuch
+        <select id="notebookSel" disabled><option>–</option></select>
+      </label>
+      <label>Seitentitel
+        <input id="titleInput" list="titleList" placeholder="z. B. Aufgabe 3" autocomplete="off" disabled>
+        <datalist id="titleList"></datalist>
+      </label>
+      <label>Erste Zeile des Antwortfelds
+        <input id="markerInput" value="Answer:" autocomplete="off">
+      </label>
+    </div>
+    <div class="actions">
+      <button id="loadBtn" type="button" class="primary" disabled>Antworten laden</button>
+      <label class="check"><input id="onlyMissing" type="checkbox"> Nur Fehlende</label>
+      <label class="check"><input id="autoRefresh" type="checkbox"> Jede Minute aktualisieren</label>
+    </div>
+  </section>
+
+  <div id="status" class="status" role="status" aria-live="polite"></div>
+  <div id="summary" class="summary"></div>
+  <main id="results" class="results"></main>
+
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Manifest für das OneNote-Add-in "Antwort-Übersicht".
+  WICHTIG: Ersetze überall  https://DEIN-NAME.github.io/onenote-antworten
+  durch die Adresse, unter der du die Dateien veröffentlichst (siehe README.md).
+-->
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+           xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+           xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+           xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
+           xsi:type="TaskPaneApp">
+  <Id>a661664b-ed0d-4b9f-8e2a-3b3012fa8991</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>Antwort-Übersicht</ProviderName>
+  <DefaultLocale>de-DE</DefaultLocale>
+  <DisplayName DefaultValue="Antwort-Übersicht"/>
+  <Description DefaultValue="Zeigt die Antworten aller Schülerinnen und Schüler aus einem Antwortfeld einer verteilten Kursnotizbuch-Seite in einer Übersicht."/>
+  <IconUrl DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/assets/icon-32.png"/>
+  <HighResolutionIconUrl DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/assets/icon-80.png"/>
+  <SupportUrl DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/"/>
+  <AppDomains/>
+  <Hosts>
+    <Host Name="Notebook"/>
+  </Hosts>
+  <DefaultSettings>
+    <SourceLocation DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/taskpane.html"/>
+  </DefaultSettings>
+  <Permissions>ReadDocument</Permissions>
+
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Hosts>
+      <Host xsi:type="Notebook">
+        <DesktopFormFactor>
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabHome">
+              <Group id="AntwortUebersicht.Group">
+                <Label resid="Group.Label"/>
+                <Icon>
+                  <bt:Image size="16" resid="Icon.16"/>
+                  <bt:Image size="32" resid="Icon.32"/>
+                  <bt:Image size="80" resid="Icon.80"/>
+                </Icon>
+                <Control xsi:type="Button" id="AntwortUebersicht.OpenButton">
+                  <Label resid="Button.Label"/>
+                  <Supertip>
+                    <Title resid="Button.Label"/>
+                    <Description resid="Button.Tooltip"/>
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="Icon.16"/>
+                    <bt:Image size="32" resid="Icon.32"/>
+                    <bt:Image size="80" resid="Icon.80"/>
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>AntwortUebersichtPane</TaskpaneId>
+                    <SourceLocation resid="Taskpane.Url"/>
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+    <Resources>
+      <bt:Images>
+        <bt:Image id="Icon.16" DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/assets/icon-16.png"/>
+        <bt:Image id="Icon.32" DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/assets/icon-32.png"/>
+        <bt:Image id="Icon.80" DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/assets/icon-80.png"/>
+      </bt:Images>
+      <bt:Urls>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://DEIN-NAME.github.io/onenote-antworten/taskpane.html"/>
+      </bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="Group.Label" DefaultValue="Antworten"/>
+        <bt:String id="Button.Label" DefaultValue="Antwort-Übersicht"/>
+      </bt:ShortStrings>
+      <bt:LongStrings>
+        <bt:String id="Button.Tooltip" DefaultValue="Sammelt die Antworten aller Schülerinnen und Schüler zur aktuell geöffneten Seite."/>
+      </bt:LongStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>

@@ -160,21 +160,67 @@ ${f.text}`;
   return { system, user };
 }
 
+// Ruft die KI auf – mit Wiederholung bei Überlastung und Prüfung auf abgeschnittene Antworten
 async function callAI(system, user) {
+  let budget = 1500;
+  let busy = 0, redo = 0;
+  for (;;) {
+    let res;
+    try {
+      res = await callAIOnce(system, user, budget);
+    } catch (e) {
+      // 429 = zu viele Anfragen, 529/503 = Dienst überlastet, 0 = Netzwerk → kurz warten, erneut
+      if ([0, 429, 500, 502, 503, 504, 529].includes(e.status) && busy < 4) {
+        const wait = e.retryAfter || Math.min(30, 3 * 2 ** busy);
+        busy++;
+        setStatus(`KI ist gerade ausgelastet – neuer Versuch in ${wait} s …`);
+        await sleep(wait * 1000);
+        continue;
+      }
+      throw e;
+    }
+    if (res.truncated && redo < 2) { redo++; budget *= 2; continue; }   // abgeschnitten → mit mehr Platz neu
+    if (!res.text) {
+      if (res.reason === "content_filter") throw new Error("Der Inhaltsfilter von Azure hat die Antwort blockiert.");
+      if (redo < 2) { redo++; continue; }
+      throw new Error(`Die KI hat keinen Text geliefert (Grund: ${res.reason || "unbekannt"}).`);
+    }
+    if (res.truncated) res.text += " …";
+    return res;
+  }
+}
+
+function aiError(prefix, r, j) {
+  const err = new Error(prefix + ((j && j.error && j.error.message) || `HTTP ${r.status}`));
+  err.status = r.status;
+  const ra = Number(r.headers.get("retry-after"));
+  if (ra > 0) err.retryAfter = Math.min(ra, 60);
+  return err;
+}
+
+async function safeFetch(url, opt) {
+  try { return await fetch(url, opt); }
+  catch (e) { const err = new Error("Keine Verbindung zur KI (" + e.message + ")"); err.status = 0; throw err; }
+}
+
+async function callAIOnce(system, user, budget) {
   const s = getAI();
   if (s.provider === "azure") {
     const url = `${s.azEndpoint.replace(/\/+$/, "")}/openai/deployments/${encodeURIComponent(s.azDeployment)}` +
       `/chat/completions?api-version=2024-10-21`;
-    const r = await fetch(url, {
+    const r = await safeFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "api-key": s.azKey },
       body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
     });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error("Azure OpenAI: " + ((j.error && j.error.message) || `HTTP ${r.status}`));
-    return ((j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content) || "").trim();
+    if (!r.ok) throw aiError("Azure OpenAI: ", r, j);
+    const c = (j.choices && j.choices[0]) || {};
+    let content = c.message && c.message.content;
+    if (Array.isArray(content)) content = content.map((x) => x.text || "").join("");
+    return { text: (content || "").trim(), truncated: c.finish_reason === "length", reason: c.finish_reason };
   }
-  const r = await fetch("https://api.anthropic.com/v1/messages", {
+  const r = await safeFetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -184,14 +230,16 @@ async function callAI(system, user) {
     },
     body: JSON.stringify({
       model: s.anModel,
-      max_tokens: 600,
+      max_tokens: budget,
       system,
       messages: [{ role: "user", content: user }],
     }),
   });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error("Claude: " + ((j.error && j.error.message) || `HTTP ${r.status}`));
-  return (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+  if (!r.ok) throw aiError("Claude: ", r, j);
+  // Nur Textblöcke verwenden (eventuelle "Denk"-Blöcke ignorieren)
+  const text = (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+  return { text, truncated: j.stop_reason === "max_tokens", reason: j.stop_reason };
 }
 
 async function generateFeedback(k) {
@@ -208,8 +256,7 @@ async function generateFeedback(k) {
   render();
   try {
     const { system, user } = buildPrompt(item.r, item.f, s);
-    const text = await callAI(system, user);
-    if (!text) throw new Error("Die KI hat keinen Text geliefert.");
+    const { text } = await callAI(system, user);
     fbState.set(k, { state: "ready", text });
   } catch (e) {
     console.error(e);
@@ -230,7 +277,7 @@ async function feedbackForAll() {
   if (!keys.length) { setStatus("Keine offenen Antworten ohne Feedback in der aktuellen Ansicht."); return; }
   $("fbAllBtn").disabled = true;
   setStatus(`Erstelle Feedback für ${keys.length} Antworten …`);
-  await pool(keys, 3, (k) => generateFeedback(k));
+  await pool(keys, 2, (k) => generateFeedback(k));
   $("fbAllBtn").disabled = false;
   setStatus(`Feedback für ${keys.length} Antworten erstellt – bitte prüfen.`);
 }

@@ -115,6 +115,9 @@ function feedbackHtml(r, f) {
              <button type="button" class="fb-btn" data-act="gen" data-k="${ek}">Neu erstellen</button>
              <button type="button" class="fb-btn" data-act="discard" data-k="${ek}">Verwerfen</button>`}
       </div>
+      ${st.state !== "saved" ? `<div class="note">${f.fbBox
+        ? "Wird ins Feld „Feedback:“ auf der Seite eingetragen."
+        : "Wird unter die Antwort gesetzt. Tipp: Ein Textfeld „Feedback:“ auf der Vorlage verhindert, dass es anderen Text überdeckt."}</div>` : ""}
     </div>`;
 }
 
@@ -293,20 +296,30 @@ async function saveFeedback(k) {
     return;
   }
   const { r, f } = item;
-  if (!f.targetId) { setStatus("Das Antwortfeld konnte nicht eindeutig bestimmt werden. Bitte neu laden.", true); return; }
+  if (!f.fbTarget) { setStatus("Das Antwortfeld konnte nicht eindeutig bestimmt werden. Bitte neu laden.", true); return; }
 
   const lines = st.text.split(/\n+/).map((l) => l.trim()).filter(Boolean);
   const color = "color:#7719aa";
-  const html = lines.map((l, i) => i === 0
-    ? `<p style="${color}">💬 <b>Feedback:</b> ${esc(l)}</p>`
-    : `<p style="${color}">${esc(l)}</p>`).join("");
+  let html;
+  if (f.fbBox === "dedicated") {
+    // Eigenes Feedback-Feld: einfach die Sätze hineinschreiben
+    html = lines.map((l) => `<p style="${color}">${esc(l)}</p>`).join("");
+  } else if (f.fbBox === "shared") {
+    // Ein Feedback-Feld für mehrere Antworten: mit Kennzeichnung "a)" o. Ä.
+    html = `<p style="${color}"><b>${esc(f.display)})</b> ${esc(lines.join(" "))}</p>`;
+  } else {
+    // Kein Feedback-Feld auf der Seite: unter die Antwort setzen
+    html = lines.map((l, i) => i === 0
+      ? `<p style="${color}">💬 <b>Feedback:</b> ${esc(l)}</p>`
+      : `<p style="${color}">${esc(l)}</p>`).join("");
+  }
 
   try {
     setStatus(`Trage Feedback bei ${r.name} ein …`);
     await graph(`${state.base}/pages/${r.page.id}/content`, "none", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify([{ target: f.targetId, action: "append", content: html }]),
+      body: JSON.stringify([{ target: f.fbTarget, action: "append", content: html }]),
     });
     st.state = "saved";
     f.existingFeedback = st.text;

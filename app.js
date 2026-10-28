@@ -482,11 +482,23 @@ function evaluateHtml(html, markerBase) {
 
   const fields = [];
   const taskLines = [];
+  const fbBoxes = [];   // Textfelder auf der Vorlage, die mit "Feedback:" beginnen
   for (const box of boxes) {
     const { lines, extras, images } = collect(box);
     if (!lines.length) continue;
     const m = matchMarker(lines[0], markerBase);
-    if (!m) { taskLines.push(...lines); continue; }
+    if (!m) {
+      const fb = markerBase !== "feedback" && matchMarker(lines[0], "feedback");
+      if (fb) {
+        fbBoxes.push({
+          label: fb.label, id: box.getAttribute("id") || "",
+          lines: (fb.answer ? [fb.answer] : []).concat(lines.slice(1)),
+        });
+      } else {
+        taskLines.push(...lines);
+      }
+      continue;
+    }
     // Bereits eingetragenes Feedback gehört nicht zur Antwort
     let body = lines.slice(1);
     let existingFeedback = "";
@@ -505,8 +517,44 @@ function evaluateHtml(html, markerBase) {
   fields.forEach((f, i) => {
     f.key = f.label ? "L:" + norm(f.label) : "N:" + (i + 1);
     f.display = f.label || String(i + 1);
+    f.fbTarget = f.targetId;   // Standard: unter die Antwort
+    f.fbBox = null;            // "dedicated" | "shared" wenn ein Feedback-Feld genutzt wird
   });
+  assignFeedbackBoxes(fields, fbBoxes);
   return { fields, taskText: taskLines.join("\n").slice(0, 3000) };
+}
+
+// Ordnet jedem Antwortfeld ein Feedback-Feld der Vorlage zu:
+//  "Feedback a:" ↔ "Answer a:"; sonst der Reihe nach; gibt es nur eins, teilen sich alle Antworten dieses Feld.
+function assignFeedbackBoxes(fields, boxes) {
+  boxes = boxes.filter((b) => b.id);
+  if (!boxes.length || !fields.length) return;
+  const used = new Set();
+  const open = [];
+  fields.forEach((f) => {
+    const b = f.label && boxes.find((x) => !used.has(x) && x.label && norm(x.label) === norm(f.label));
+    if (b) { used.add(b); useBox(f, b, "dedicated"); } else open.push(f);
+  });
+  const rest = boxes.filter((b) => !used.has(b));
+  if (!open.length) return;
+  if (rest.length === open.length) {
+    open.forEach((f, i) => useBox(f, rest[i], "dedicated"));
+  } else if (boxes.length === 1) {
+    open.forEach((f) => useBox(f, boxes[0], fields.length > 1 ? "shared" : "dedicated"));
+  }
+}
+
+function useBox(f, box, kind) {
+  f.fbTarget = box.id;
+  f.fbBox = kind;
+  const strip = (l) => l.replace(/^💬\s*feedback:\s*/i, "");
+  if (kind === "dedicated") {
+    f.existingFeedback = box.lines.map(strip).join("\n");
+  } else {
+    const prefix = norm(f.display) + ")";
+    const own = box.lines.filter((l) => norm(l).startsWith(prefix));
+    f.existingFeedback = own.map((l) => clean(l).slice(prefix.length).trim()).join("\n");
+  }
 }
 
 function statusOf(fields) {

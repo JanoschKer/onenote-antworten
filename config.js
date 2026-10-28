@@ -5,4 +5,5 @@ window.APP_CONFIG = {
 
   // "Verzeichnis-ID (Mandant)" deiner Schule
   tenantId: "645746c6-0a84-41ef-a5e0-03132e950124",
+  feedbackSchreiben: true
 };

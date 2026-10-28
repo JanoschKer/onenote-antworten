@@ -10,7 +10,8 @@
 
 const CFG = window.APP_CONFIG || {};
 const GRAPH = "https://graph.microsoft.com/v1.0";
-const SCOPES = "openid profile offline_access User.Read Notes.Read.All Team.ReadBasic.All";
+const SCOPES = "openid profile offline_access User.Read Team.ReadBasic.All " +
+  (CFG.feedbackSchreiben ? "Notes.ReadWrite.All" : "Notes.Read.All");
 const AUTH = `https://login.microsoftonline.com/${CFG.tenantId}/oauth2/v2.0`;
 const REDIRECT = location.origin + location.pathname;
 const SKIP_PREFIX = "_";
@@ -136,12 +137,17 @@ function expireToken() {
 /* Microsoft Graph                                                     */
 /* ------------------------------------------------------------------ */
 
-async function graph(path, mode) {
+async function graph(path, mode, init) {
   const url = path.startsWith("http") ? path : GRAPH + path;
   for (let attempt = 0; ; attempt++) {
     const token = await getAccessToken();
     if (!token) throw new NeedLogin();
-    const r = await fetch(url, { headers: { Authorization: "Bearer " + token } });
+    const opt = init || {};
+    const r = await fetch(url, {
+      method: opt.method || "GET",
+      headers: { Authorization: "Bearer " + token, ...(opt.headers || {}) },
+      body: opt.body,
+    });
     if (r.status === 401 && attempt === 0) { expireToken(); continue; }
     if ([429, 503, 504].includes(r.status) && attempt < 6) {
       const wait = Number(r.headers.get("Retry-After")) || Math.min(30, 2 ** (attempt + 1));
@@ -156,6 +162,7 @@ async function graph(path, mode) {
       err.status = r.status;
       throw err;
     }
+    if (mode === "none") return null;
     return mode === "text" ? r.text() : mode === "blob" ? r.blob() : r.json();
   }
 }
@@ -330,16 +337,19 @@ async function loadAnswers() {
   try {
     const found = await findPages(title);
     setStatus(`Lese ${found.size} Seiten …`);
-    const marker = norm(markerRaw);
+    const markerBase = norm(markerRaw).replace(/[:\s]+$/, "");
     state.results = await pool(state.students, 4, async (s) => {
       const page = found.get(s);
-      if (!page) return { name: s.name, status: "keine-seite", text: "", extras: [], images: [] };
-      const html = await graph(`${state.base}/pages/${page.id}/content`, "text");
-      const r = { name: s.name, page, ...evaluateHtml(html, marker) };
-      r.images = (await Promise.all(r.imageSrcs.slice(0, 4).map(loadImage))).filter(Boolean);
-      return r;
+      if (!page) return { name: s.name, status: "keine-seite", fields: [] };
+      const html = await graph(`${state.base}/pages/${page.id}/content?includeIDs=true`, "text");
+      const { fields, taskText } = evaluateHtml(html, markerBase);
+      for (const f of fields) {
+        f.images = (await Promise.all(f.imageSrcs.slice(0, 4).map(loadImage))).filter(Boolean);
+      }
+      return { name: s.name, page, fields, taskText, status: statusOf(fields) };
     });
     state.title = title;
+    buildFieldOptions();
     const time = new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
     setStatus(`Stand: ${time} Uhr`);
     render();
@@ -400,20 +410,71 @@ function collect(root) {
   return { lines, extras: [...extras], images };
 }
 
-function evaluateHtml(html, marker) {
+// Prüft, ob eine Zeile ein Antwortfeld einleitet: "Answer:", "Answer a:", "Answer 2: Text" …
+function matchMarker(line, base) {
+  if (!norm(line).startsWith(base)) return null;
+  const rest = clean(line).slice(base.length);
+  const colon = rest.indexOf(":");
+  if (colon >= 0 && colon <= 12) {
+    return { label: rest.slice(0, colon).trim(), answer: rest.slice(colon + 1).trim() };
+  }
+  if (/^[\p{L}\p{N}]/u.test(rest)) return null; // z. B. "Answering …" ist kein Feld
+  return { label: "", answer: rest.trim() };
+}
+
+// Position eines Textfelds auf der Seite (für die Reihenfolge von oben nach unten)
+function posOf(el) {
+  const st = el.getAttribute("style") || "";
+  const get = (k) => {
+    const m = new RegExp(`(?:^|;)\\s*${k}\\s*:\\s*(-?[\\d.]+)`).exec(st);
+    return m ? parseFloat(m[1]) : 0;
+  };
+  return { top: get("top"), left: get("left") };
+}
+
+// Liefert alle Antwortfelder der Seite, sortiert von oben nach unten
+function evaluateHtml(html, markerBase) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   let boxes = [...doc.body.children].filter((e) => e.tagName === "DIV");
   if (!boxes.length) boxes = [doc.body];
+  boxes = boxes
+    .map((el, i) => ({ el, i, ...posOf(el) }))
+    .sort((a, b) => a.top - b.top || a.left - b.left || a.i - b.i)
+    .map((b) => b.el);
 
+  const fields = [];
+  const taskLines = [];
   for (const box of boxes) {
     const { lines, extras, images } = collect(box);
-    if (!lines.length || !norm(lines[0]).startsWith(marker)) continue;
-    const firstRest = clean(lines[0]).slice(marker.length).trim();
-    const answer = (firstRest ? [firstRest] : []).concat(lines.slice(1));
-    const text = answer.join("\n");
-    return { status: text || extras.length || images.length ? "ok" : "leer", text, extras, imageSrcs: images };
+    if (!lines.length) continue;
+    const m = matchMarker(lines[0], markerBase);
+    if (!m) { taskLines.push(...lines); continue; }
+    // Bereits eingetragenes Feedback gehört nicht zur Antwort
+    let body = lines.slice(1);
+    let existingFeedback = "";
+    const fi = body.findIndex(isFeedbackLine);
+    if (fi >= 0) {
+      existingFeedback = body.slice(fi).join("\n").replace(/^💬\s*feedback:\s*/i, "");
+      body = body.slice(0, fi);
+    }
+    const text = (m.answer ? [m.answer] : []).concat(body).join("\n");
+    fields.push({
+      label: m.label, text, extras, imageSrcs: images, existingFeedback,
+      targetId: box.getAttribute("id") || "",
+      status: text || extras.length || images.length ? "ok" : "leer",
+    });
   }
-  return { status: "kein-feld", text: "", extras: [], imageSrcs: [] };
+  fields.forEach((f, i) => {
+    f.key = f.label ? "L:" + norm(f.label) : "N:" + (i + 1);
+    f.display = f.label || String(i + 1);
+  });
+  return { fields, taskText: taskLines.join("\n").slice(0, 3000) };
+}
+
+function statusOf(fields) {
+  if (!fields.length) return "kein-feld";
+  const ok = fields.filter((f) => f.status === "ok").length;
+  return ok === fields.length ? "ok" : ok === 0 ? "leer" : "teilweise";
 }
 
 // Bilder aus dem Antwortfeld laden (mit Anmeldung) und zwischenspeichern
@@ -434,27 +495,70 @@ async function loadImage(src) {
 /* Anzeige                                                             */
 /* ------------------------------------------------------------------ */
 
-const LABELS = { ok: "beantwortet", leer: "noch nichts", "kein-feld": "Feld fehlt", "keine-seite": "Seite fehlt" };
+// Auswahl "Feld": alle Felder, die auf irgendeiner Seite vorkommen
+function buildFieldOptions() {
+  const keys = new Map();
+  state.results.forEach((r) => (r.fields || []).forEach((f) => { if (!keys.has(f.key)) keys.set(f.key, f.display); }));
+  const sel = $("fieldSel");
+  const prev = sel.value;
+  sel.innerHTML = `<option value="">Alle Felder</option>` +
+    [...keys].map(([k, d]) => `<option value="${esc(k)}">Feld ${esc(d)}</option>`).join("");
+  sel.value = keys.has(prev) ? prev : "";
+  $("fieldWrap").hidden = keys.size < 2;
+}
+
+// Was für eine Person angezeigt wird – abhängig von der Feldauswahl
+function viewOf(r) {
+  if (r.status === "keine-seite") return { status: "keine-seite", fields: [] };
+  const key = $("fieldWrap").hidden ? "" : $("fieldSel").value;
+  const fields = key ? r.fields.filter((f) => f.key === key) : r.fields;
+  return { status: statusOf(fields), fields };
+}
+
+function badgeText(v) {
+  switch (v.status) {
+    case "ok": return "beantwortet";
+    case "teilweise": return `${v.fields.filter((f) => f.status === "ok").length}/${v.fields.length} beantwortet`;
+    case "leer": return "noch nichts";
+    case "kein-feld": return "Feld fehlt";
+    default: return "Seite fehlt";
+  }
+}
 
 function render() {
   const res = state.results;
   if (!res.length) { $("results").innerHTML = ""; $("summary").innerHTML = ""; return; }
 
-  const answered = res.filter((r) => r.status === "ok").length;
-  const pct = Math.round((answered / res.length) * 100);
+  const views = res.map((r) => ({ r, v: viewOf(r) }));
+  const full = views.filter((x) => x.v.status === "ok").length;
+  const part = views.filter((x) => x.v.status === "teilweise").length;
+  const pct = Math.round((full / res.length) * 100);
+  const selOpt = $("fieldWrap").hidden || !$("fieldSel").value ? "" : " · " + $("fieldSel").selectedOptions[0].text;
   $("summary").innerHTML =
-    `${esc(state.title)} – ${answered} von ${res.length} haben geantwortet` +
+    `${esc(state.title)}${esc(selOpt)} – ${full} von ${res.length} fertig` +
+    (part ? `, ${part} teilweise` : "") +
     `<div class="bar"><span style="width:${pct}%"></span></div>`;
 
-  const shown = $("onlyMissing").checked ? res.filter((r) => r.status !== "ok") : res;
+  const shown = $("onlyMissing").checked ? views.filter((x) => x.v.status !== "ok") : views;
+  $("fbAllBtn").hidden = false;
+  fbIndex.clear();
   if (!shown.length) { $("results").innerHTML = `<p class="note">Alle haben geantwortet. 🎉</p>`; return; }
 
-  $("results").innerHTML = shown.map((r) => {
+  $("results").innerHTML = shown.map(({ r, v }) => {
+    const multi = v.fields.length > 1 || (r.fields && r.fields.length > 1 && v.fields.length === 1);
+    const body = v.fields.map((f) => `<div class="field ${f.status}">
+        ${multi ? `<div class="flabel">Feld ${esc(f.display)}</div>` : ""}
+        ${f.text ? `<p class="answer">${esc(f.text)}</p>` : ""}
+        ${(f.images || []).length ? `<div class="thumbs">${f.images.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="Bild von ${esc(r.name)}"></a>`).join("")}</div>` : ""}
+        ${f.extras.length ? `<div class="note">📎 Enthält: ${esc(f.extras.join(", "))}</div>` : ""}
+        ${f.status === "leer" && multi ? `<div class="empty">noch leer</div>` : ""}
+        ${feedbackHtml(r, f)}
+      </div>`).join("");
+
     const notes = [];
-    if (r.extras.length) notes.push("📎 Enthält: " + r.extras.join(", "));
-    if (r.status === "leer") notes.push("Falls mit dem Stift direkt auf die Seite geschrieben: Diese Handschrift wird hier nicht angezeigt – bitte Seite öffnen.");
-    if (r.status === "kein-feld") notes.push("Antwortfeld nicht gefunden – evtl. gelöscht oder erste Zeile verändert.");
-    if (r.status === "keine-seite") notes.push("Seite bei dieser Person nicht gefunden (umbenannt?).");
+    if (v.status === "leer") notes.push("Falls mit dem Stift direkt auf die Seite geschrieben: Diese Handschrift wird hier nicht angezeigt – bitte Seite öffnen.");
+    if (v.status === "kein-feld") notes.push("Antwortfeld nicht gefunden – evtl. gelöscht oder erste Zeile verändert.");
+    if (v.status === "keine-seite") notes.push("Seite bei dieser Person nicht gefunden (umbenannt?).");
     if (r.page && r.page.lastModifiedDateTime) {
       const d = new Date(r.page.lastModifiedDateTime);
       notes.push("Zuletzt geändert: " + d.toLocaleString("de-DE", { weekday: "short", hour: "2-digit", minute: "2-digit" }));
@@ -467,10 +571,9 @@ function render() {
       web ? `<a href="${esc(web)}" target="_blank" rel="noopener">Im Web</a>` : "",
     ].join("");
 
-    return `<article class="card ${r.status}">
-      <h2><span>${esc(r.name)}</span><span class="badge">${LABELS[r.status]}</span></h2>
-      ${r.text ? `<p class="answer">${esc(r.text)}</p>` : ""}
-      ${(r.images || []).length ? `<div class="thumbs">${r.images.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="Bild von ${esc(r.name)}"></a>`).join("")}</div>` : ""}
+    return `<article class="card ${v.status}">
+      <h2><span>${esc(r.name)}</span><span class="badge">${badgeText(v)}</span></h2>
+      ${body}
       ${notes.map((n) => `<div class="note">${esc(n)}</div>`).join("")}
       ${links ? `<div class="links">${links}</div>` : ""}
     </article>`;
@@ -505,8 +608,11 @@ async function init() {
   $("loadBtn").addEventListener("click", loadAnswers);
   $("titleInput").addEventListener("keydown", (e) => { if (e.key === "Enter") loadAnswers(); });
   $("onlyMissing").addEventListener("change", render);
+  $("fieldSel").addEventListener("change", render);
+  initAISettings();
   setInterval(() => {
-    if ($("autoRefresh").checked && !state.loading && !$("loadBtn").disabled && state.results.length) loadAnswers();
+    if ($("autoRefresh").checked && !state.loading && !$("loadBtn").disabled && state.results.length &&
+        !(document.activeElement && document.activeElement.tagName === "TEXTAREA")) loadAnswers();
   }, 60000);
 
   $("titleInput").value = LS.get("aue.title") || "";

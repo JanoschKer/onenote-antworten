@@ -82,3 +82,35 @@ button:disabled { opacity: .55; cursor: default; }
 
 .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px; }
 .thumbs img { width: 100%; max-height: 240px; object-fit: contain; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; display: block; }
+
+.check select { width: auto; min-height: 40px; padding: 6px 8px; }
+.field { display: grid; gap: 4px; }
+.field + .field { border-top: 1px dashed var(--line); padding-top: 6px; }
+.flabel { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.field .empty { font-size: 13px; color: var(--missing); }
+.card.teilweise { border-left-color: var(--warn); }
+.card.teilweise .badge { background: var(--warn-bg); color: var(--warn); }
+
+/* KI-Feedback */
+details.panel summary { cursor: pointer; font-weight: 600; list-style-position: outside; }
+details.panel[open] summary { margin-bottom: 12px; }
+.ai-state { font-weight: 400; color: var(--muted); font-size: 14px; margin-left: 6px; }
+#aiPanel .fields + .fields { margin-top: 12px; }
+#aiPanel input[type="password"] { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-height: 44px; width: 100%; }
+.crit { display: grid; gap: 4px; font-size: 13px; color: var(--muted); margin-top: 12px; }
+textarea { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; width: 100%; resize: vertical; }
+button.secondary, .fb-btn {
+  background: var(--surface); color: var(--accent); border: 1px solid var(--accent); border-radius: 6px;
+  padding: 0 12px; min-height: 36px; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+button.secondary { min-height: 44px; }
+.fb-btn.primary-sm { background: var(--accent); color: var(--accent-fg); }
+.field > .fb-btn { justify-self: start; margin-top: 2px; }
+.fb-box { display: grid; gap: 6px; margin-top: 4px; }
+.fb-box textarea { border-color: var(--accent); }
+.fb-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.fb-saved { color: var(--ok); font-weight: 600; font-size: 14px; }
+.fb-existing { font-size: 13px; color: var(--accent); white-space: pre-wrap; }
+.fb-error { font-size: 13px; color: var(--missing); }
+
+[hidden] { display: none !important; }

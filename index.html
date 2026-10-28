@@ -39,15 +39,61 @@
     <div class="actions">
       <button id="loadBtn" type="button" class="primary" disabled>Antworten laden</button>
       <label class="check"><input id="onlyMissing" type="checkbox"> Nur Fehlende</label>
+      <label id="fieldWrap" class="check" hidden>Feld <select id="fieldSel"></select></label>
+      <button id="fbAllBtn" type="button" class="secondary" hidden>✨ Feedback für alle</button>
       <label class="check"><input id="autoRefresh" type="checkbox"> Jede Minute aktualisieren</label>
     </div>
   </section>
+
+  <!-- KI-Feedback -->
+  <details id="aiPanel" class="panel">
+    <summary>✨ KI-Feedback einrichten <span id="ai_state" class="ai-state"></span></summary>
+    <div class="fields">
+      <label>Anbieter
+        <select id="ai_provider">
+          <option value="anthropic">Claude (Anthropic)</option>
+          <option value="azure">Azure OpenAI (über die Schule)</option>
+        </select>
+      </label>
+      <label>Sprache des Feedbacks
+        <select id="ai_lang">
+          <option value="auto">wie die Aufgabe</option>
+          <option value="de">Deutsch</option>
+          <option value="en">Englisch</option>
+        </select>
+      </label>
+    </div>
+    <div id="ai_anthropic" class="fields">
+      <label>API-Schlüssel (Claude)
+        <input id="ai_anKey" type="password" autocomplete="off" placeholder="sk-ant-…">
+      </label>
+      <label>Modell
+        <input id="ai_anModel" autocomplete="off">
+      </label>
+    </div>
+    <div id="ai_azure" class="fields" hidden>
+      <label>Endpunkt
+        <input id="ai_azEndpoint" autocomplete="off" placeholder="https://NAME.openai.azure.com">
+      </label>
+      <label>Deployment-Name
+        <input id="ai_azDeployment" autocomplete="off">
+      </label>
+      <label>Schlüssel
+        <input id="ai_azKey" type="password" autocomplete="off">
+      </label>
+    </div>
+    <label class="crit">Hinweise für das Feedback zu dieser Seite (optional – z. B. Erwartungshorizont, worauf achten)
+      <textarea id="ai_crit" rows="3" placeholder="z. B. Achte auf vollständige Sätze und die Verwendung des Simple Past."></textarea>
+    </label>
+    <p class="note">Der Schlüssel bleibt nur auf diesem Gerät. An die KI gehen nur Aufgabentext, deine Hinweise und die Antwort – keine Namen.</p>
+  </details>
 
   <div id="status" class="status" role="status" aria-live="polite"></div>
   <div id="summary" class="summary"></div>
   <main id="results" class="results"></main>
 
   <script src="config.js"></script>
+  <script src="feedback.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

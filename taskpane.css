@@ -68,3 +68,13 @@ button:disabled { opacity: .6; cursor: progress; }
 
 .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(90px, 1fr)); gap: 6px; margin-top: 4px; }
 .thumbs img { width: 100%; max-height: 200px; object-fit: contain; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+
+.controls select { padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; font: inherit; }
+.field { display: grid; gap: 3px; }
+.field + .field { border-top: 1px dashed var(--line); padding-top: 5px; margin-top: 4px; }
+.flabel { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; }
+.field .empty { font-size: 12px; color: var(--missing); }
+.card.teilweise { border-left-color: var(--warn); }
+.card.teilweise .badge { background: var(--warn-bg); color: var(--warn); }
+
+[hidden] { display: none !important; }

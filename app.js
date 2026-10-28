@@ -31,6 +31,9 @@ const state = {
   results: [],
   title: "",
   loading: false,
+  contentCache: new Map(),  // Seiten-ID -> { modified, html }
+  knownPages: new Map(),    // Seitentitel -> Map(Schüler -> Seite)
+  noSearch: new Set(),      // Orte, an denen die Sammelsuche nicht funktioniert
 };
 
 /* ------------------------------------------------------------------ */
@@ -137,12 +140,19 @@ function expireToken() {
 /* Microsoft Graph                                                     */
 /* ------------------------------------------------------------------ */
 
+// Wird Microsoft zu viel, pausieren ALLE Anfragen gemeinsam (statt dass jede einzeln
+// weiterdrängelt und die Sperre verlängert).
+let graphPauseUntil = 0;
+let graphRequests = 0;
+
 async function graph(path, mode, init) {
   const url = path.startsWith("http") ? path : GRAPH + path;
   for (let attempt = 0; ; attempt++) {
+    while (Date.now() < graphPauseUntil) await sleep(graphPauseUntil - Date.now());
     const token = await getAccessToken();
     if (!token) throw new NeedLogin();
     const opt = init || {};
+    graphRequests++;
     const r = await fetch(url, {
       method: opt.method || "GET",
       headers: { Authorization: "Bearer " + token, ...(opt.headers || {}) },
@@ -150,9 +160,9 @@ async function graph(path, mode, init) {
     });
     if (r.status === 401 && attempt === 0) { expireToken(); continue; }
     if ([429, 503, 504].includes(r.status) && attempt < 6) {
-      const wait = Number(r.headers.get("Retry-After")) || Math.min(30, 2 ** (attempt + 1));
-      setStatus(`Microsoft bremst kurz ab – warte ${wait} s …`);
-      await sleep(wait * 1000);
+      const wait = Number(r.headers.get("Retry-After")) || Math.min(60, 10 * 2 ** attempt);
+      graphPauseUntil = Math.max(graphPauseUntil, Date.now() + wait * 1000);
+      setStatus(`Microsoft begrenzt die Anzahl der Abfragen – kurze Pause (${wait} s) …`);
       continue;
     }
     if (!r.ok) {
@@ -286,7 +296,7 @@ function norm(s) {
   return (s || "").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
-async function findPages(title) {
+async function findPages(title, quick) {
   const wanted = norm(title);
   const found = new Map(); // student -> page
   const take = (student, page) => {
@@ -295,8 +305,8 @@ async function findPages(title) {
     if (!prev || (page.lastModifiedDateTime || "") > (prev.lastModifiedDateTime || "")) found.set(student, page);
   };
 
-  // 1) schnell: eine Suche über alle Seiten
-  try {
+  // 1) schnell: eine Suche über alle Seiten (wird übersprungen, wenn sie hier schon einmal scheiterte)
+  if (!state.noSearch.has(state.base)) try {
     const filter = `contains(tolower(title),'${title.toLowerCase().replace(/'/g, "''")}')`;
     const pages = await graphAll(
       `${state.base}/pages?$filter=${encodeURIComponent(filter)}` +
@@ -304,25 +314,41 @@ async function findPages(title) {
     );
     pages.forEach((p) => take(state.sectionToStudent.get(p.parentSection && p.parentSection.id), p));
   } catch (e) {
+    if (e instanceof NeedLogin) throw e;
     console.warn("Sammelsuche nicht möglich – suche pro Abschnitt", e);
+    state.noSearch.add(state.base);
   }
   if (found.size) return found;
 
-  // 2) Ausweichweg: jeden Abschnitt einzeln durchsuchen
-  const jobs = [];
-  state.students.forEach((s) => s.sectionIds.forEach((id) => jobs.push({ s, id })));
-  let done = 0;
-  await pool(jobs, 4, async ({ s, id }) => {
-    const pages = await graphAll(
-      `${state.base}/sections/${id}/pages?$select=id,title,links,lastModifiedDateTime&$top=100`
-    ).catch(() => []);
-    pages.forEach((p) => take(s, p));
-    setStatus(`Durchsuche Abschnitte … ${++done}/${jobs.length}`);
+  // 2) Bereits gefundene Seiten nur kurz auf Änderungen prüfen (1 kleine Abfrage pro Seite)
+  const known = state.knownPages.get(wanted) || new Map();
+  await pool([...known], 2, async ([s, p]) => {
+    try {
+      take(s, await graph(`${state.base}/pages/${p.id}?$select=id,title,links,lastModifiedDateTime`));
+    } catch (e) {
+      if (e instanceof NeedLogin) throw e;   // Seite gelöscht o. Ä. → unten neu suchen
+    }
   });
+
+  // 3) Abschnitte durchsuchen – nur bei Personen, deren Seite noch nicht bekannt ist,
+  //    und nicht beim automatischen Aktualisieren
+  if (!quick || !known.size) {
+    const jobs = [];
+    state.students.forEach((s) => { if (!found.has(s)) s.sectionIds.forEach((id) => jobs.push({ s, id })); });
+    let done = 0;
+    await pool(jobs, 2, async ({ s, id }) => {
+      const pages = await graphAll(
+        `${state.base}/sections/${id}/pages?$select=id,title,links,lastModifiedDateTime&$top=100`
+      ).catch((e) => { if (e instanceof NeedLogin) throw e; return []; });
+      pages.forEach((p) => take(s, p));
+      setStatus(`Durchsuche Abschnitte … ${++done}/${jobs.length}`);
+    });
+  }
+  state.knownPages.set(wanted, new Map(found));
   return found;
 }
 
-async function loadAnswers() {
+async function loadAnswers(auto) {
   if (state.loading) return;
   const title = $("titleInput").value.trim();
   const markerRaw = $("markerInput").value.trim();
@@ -335,13 +361,24 @@ async function loadAnswers() {
   $("loadBtn").disabled = true;
   setStatus(`Suche „${title}“ …`);
   try {
-    const found = await findPages(title);
-    setStatus(`Lese ${found.size} Seiten …`);
+    const before = graphRequests;
+    const found = await findPages(title, auto === true);
     const markerBase = norm(markerRaw).replace(/[:\s]+$/, "");
-    state.results = await pool(state.students, 4, async (s) => {
+    const changed = [...found.values()].filter((p) => {
+      const c = state.contentCache.get(p.id);
+      return !c || c.modified !== p.lastModifiedDateTime;
+    }).length;
+    setStatus(changed ? `Lese ${changed} geänderte Seiten …` : "Keine Änderungen – prüfe …");
+    state.results = await pool(state.students, 2, async (s) => {
       const page = found.get(s);
       if (!page) return { name: s.name, status: "keine-seite", fields: [] };
-      const html = await graph(`${state.base}/pages/${page.id}/content?includeIDs=true`, "text");
+      let cached = state.contentCache.get(page.id);
+      if (!cached || cached.modified !== page.lastModifiedDateTime || !page.lastModifiedDateTime) {
+        const fresh = await graph(`${state.base}/pages/${page.id}/content?includeIDs=true`, "text");
+        cached = { modified: page.lastModifiedDateTime, html: fresh };
+        state.contentCache.set(page.id, cached);
+      }
+      const html = cached.html;
       const { fields, taskText } = evaluateHtml(html, markerBase);
       for (const f of fields) {
         f.images = (await Promise.all(f.imageSrcs.slice(0, 4).map(loadImage))).filter(Boolean);
@@ -351,7 +388,8 @@ async function loadAnswers() {
     state.title = title;
     buildFieldOptions();
     const time = new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
-    setStatus(`Stand: ${time} Uhr`);
+    const n = graphRequests - before;
+    setStatus(`Stand: ${time} Uhr · ${n} ${n === 1 ? "Abfrage" : "Abfragen"} an Microsoft`);
     render();
   } catch (e) {
     handleError(e);
@@ -605,15 +643,15 @@ async function init() {
   $("loginBtn").addEventListener("click", () => login().catch(handleError));
   $("locationSel").addEventListener("change", () => onLocation().catch(handleError));
   $("notebookSel").addEventListener("change", () => onNotebook().catch(handleError));
-  $("loadBtn").addEventListener("click", loadAnswers);
-  $("titleInput").addEventListener("keydown", (e) => { if (e.key === "Enter") loadAnswers(); });
+  $("loadBtn").addEventListener("click", () => loadAnswers(false));
+  $("titleInput").addEventListener("keydown", (e) => { if (e.key === "Enter") loadAnswers(false); });
   $("onlyMissing").addEventListener("change", render);
   $("fieldSel").addEventListener("change", render);
   initAISettings();
   setInterval(() => {
     if ($("autoRefresh").checked && !state.loading && !$("loadBtn").disabled && state.results.length &&
-        !(document.activeElement && document.activeElement.tagName === "TEXTAREA")) loadAnswers();
-  }, 60000);
+        !(document.activeElement && document.activeElement.tagName === "TEXTAREA")) loadAnswers(true);
+  }, 120000);
 
   $("titleInput").value = LS.get("aue.title") || "";
   $("markerInput").value = LS.get("aue.marker") || "Answer:";

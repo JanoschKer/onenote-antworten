@@ -96,7 +96,7 @@ function feedbackHtml(r, f) {
   if (f.existingFeedback && !(st && st.state === "saved")) {
     h += `<div class="fb-existing">💬 Eingetragenes Feedback: ${esc(f.existingFeedback)}</div>`;
   }
-  if (f.status !== "ok" || !f.text) return h;
+  if (f.status !== "ok" || !(f.text || (f.images || []).length)) return h;
 
   if (!st) {
     return h + `<button type="button" class="fb-btn" data-act="gen" data-k="${ek}">✨ ${f.existingFeedback ? "Neues " : ""}KI-Feedback</button>`;
@@ -107,6 +107,7 @@ function feedbackHtml(r, f) {
       <button type="button" class="fb-btn" data-act="gen" data-k="${ek}">Erneut versuchen</button>`;
   }
   return h + `<div class="fb-box">
+      ${st.read ? `<div class="fb-read">🔍 Die KI hat gelesen: ${esc(st.read)}</div>` : ""}
       <textarea data-k="${ek}" rows="4" ${st.state === "saved" ? "readonly" : ""}>${esc(st.text)}</textarea>
       <div class="fb-actions">
         ${st.state === "saved"
@@ -132,6 +133,29 @@ function onFeedbackClick(e) {
 
 /* ---------------- Feedback erstellen ---------------- */
 
+// Bilder für die KI: auf max. 1568 px verkleinern (spart Kosten, reicht zum Lesen) und als JPEG kodieren
+async function prepareImages(urls) {
+  const out = [];
+  for (const url of urls.slice(0, 4)) {
+    try {
+      const blob = await (await fetch(url)).blob();
+      const bmp = await createImageBitmap(blob);
+      const scale = Math.min(1, 1568 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(bmp.width * scale));
+      c.height = Math.max(1, Math.round(bmp.height * scale));
+      const ctx = c.getContext("2d");
+      ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, c.width, c.height);   // transparente PNGs → weißer Hintergrund
+      ctx.drawImage(bmp, 0, 0, c.width, c.height);
+      const dataUrl = c.toDataURL("image/jpeg", 0.85);
+      out.push({ type: "image/jpeg", data: dataUrl.slice(dataUrl.indexOf(",") + 1) });
+    } catch (e) {
+      console.warn("Bild konnte nicht für die KI vorbereitet werden", e);
+    }
+  }
+  return out;
+}
+
 function langText(code) {
   return code === "de" ? "Deutsch" : code === "en" ? "Englisch" : "dieselbe Sprache, in der die Aufgabe gestellt ist";
 }
@@ -146,7 +170,11 @@ Regeln:
 - Keine Noten oder Punkte, außer die Hinweise der Lehrkraft verlangen es ausdrücklich.
 - Ist die Antwort leer, unverständlich oder geht an der Aufgabe vorbei, sag das freundlich und gib einen Tipp.
 - Gib nur den Feedbacktext aus – ohne Anrede mit Namen, ohne Überschrift, ohne Anführungszeichen.
-- Sprache des Feedbacks: ${langText(s.lang)}.`;
+- Sprache des Feedbacks: ${langText(s.lang)}.${f.images && f.images.length ? `
+- Die Antwort liegt ganz oder teilweise als Bild vor (z. B. Foto einer handschriftlichen Lösung). Lies es sorgfältig.
+- Ausgabeformat in diesem Fall: Erste Zeile "Gelesen: " und danach in einem Satz bzw. wörtlich kurz, was du auf dem Bild erkennst. Dann eine Leerzeile, dann das Feedback.
+- Ist das Bild unlesbar oder nicht zur Aufgabe passend, schreib "Gelesen: nicht lesbar" und als Feedback eine freundliche Bitte, die Lösung deutlicher bzw. als besseres Foto einzufügen.
+- Erwähne keine Namen oder sonstigen persönlichen Angaben, die auf dem Bild zu sehen sind.` : ""}`;
 
   const crit = (LS.get(critKey()) || "").trim();
   const user =
@@ -162,18 +190,18 @@ Aufgabe ${f.display}):
 ${f.task || "(Aufgabentext siehe oben)"}
 
 Antwort der Schülerin / des Schülers:
-${f.text}`;
+${f.text || "(nur als Bild – siehe Anhang)"}${f.text && f.images && f.images.length ? "\n(zusätzlich als Bild – siehe Anhang)" : ""}`;
   return { system, user };
 }
 
 // Ruft die KI auf – mit Wiederholung bei Überlastung und Prüfung auf abgeschnittene Antworten
-async function callAI(system, user) {
+async function callAI(system, user, images) {
   let budget = 1500;
   let busy = 0, redo = 0;
   for (;;) {
     let res;
     try {
-      res = await callAIOnce(system, user, budget);
+      res = await callAIOnce(system, user, budget, images || []);
     } catch (e) {
       // 429 = zu viele Anfragen, 529/503 = Dienst überlastet, 0 = Netzwerk → kurz warten, erneut
       if ([0, 429, 500, 502, 503, 504, 529].includes(e.status) && busy < 4) {
@@ -209,7 +237,7 @@ async function safeFetch(url, opt) {
   catch (e) { const err = new Error("Keine Verbindung zur KI (" + e.message + ")"); err.status = 0; throw err; }
 }
 
-async function callAIOnce(system, user, budget) {
+async function callAIOnce(system, user, budget, images) {
   const s = getAI();
   if (s.provider === "azure") {
     const url = `${s.azEndpoint.replace(/\/+$/, "")}/openai/deployments/${encodeURIComponent(s.azDeployment)}` +
@@ -217,10 +245,20 @@ async function callAIOnce(system, user, budget) {
     const r = await safeFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "api-key": s.azKey },
-      body: JSON.stringify({ messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
+      body: JSON.stringify({ messages: [
+        { role: "system", content: system },
+        { role: "user", content: images.length
+          ? [{ type: "text", text: user }].concat(images.map((im) => ({
+              type: "image_url", image_url: { url: `data:${im.type};base64,${im.data}`, detail: "high" } })))
+          : user },
+      ] }),
     });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw aiError("Azure OpenAI: ", r, j);
+    if (!r.ok) {
+      const err = aiError("Azure OpenAI: ", r, j);
+      if (images.length && r.status === 400) err.message += " – Kann das Azure-Modell Bilder lesen? (z. B. GPT-4o; bei der IT nachfragen)";
+      throw err;
+    }
     const c = (j.choices && j.choices[0]) || {};
     let content = c.message && c.message.content;
     if (Array.isArray(content)) content = content.map((x) => x.text || "").join("");
@@ -238,7 +276,10 @@ async function callAIOnce(system, user, budget) {
       model: s.anModel,
       max_tokens: budget,
       system,
-      messages: [{ role: "user", content: user }],
+      messages: [{ role: "user", content: images.length
+        ? images.map((im) => ({ type: "image", source: { type: "base64", media_type: im.type, data: im.data } }))
+            .concat([{ type: "text", text: user }])
+        : user }],
     }),
   });
   const j = await r.json().catch(() => ({}));
@@ -262,8 +303,12 @@ async function generateFeedback(k) {
   render();
   try {
     const { system, user } = buildPrompt(item.r, item.f, s);
-    const { text } = await callAI(system, user);
-    fbState.set(k, { state: "ready", text });
+    const images = await prepareImages(item.f.images || []);
+    const res = await callAI(system, user, images);
+    let text = res.text, read = "";
+    const m = /^\s*(?:\*\*)?(?:gelesen|read)(?:\*\*)?\s*:\s*(.+?)\s*(?:\n\s*\n|\n(?=\S))([\s\S]*)$/i.exec(text);
+    if (images.length && m) { read = m[1].trim(); text = m[2].trim() || text; }
+    fbState.set(k, { state: "ready", text, read });
   } catch (e) {
     console.error(e);
     fbState.set(k, { state: "error", error: e.message || String(e) });
@@ -278,7 +323,7 @@ async function feedbackForAll() {
     return;
   }
   const keys = [...fbIndex.entries()]
-    .filter(([k, { f }]) => f.status === "ok" && f.text && !f.existingFeedback && !fbState.has(k))
+    .filter(([k, { f }]) => f.status === "ok" && (f.text || (f.images || []).length) && !f.existingFeedback && !fbState.has(k))
     .map(([k]) => k);
   if (!keys.length) { setStatus("Keine offenen Antworten ohne Feedback in der aktuellen Ansicht."); return; }
   $("fbAllBtn").disabled = true;

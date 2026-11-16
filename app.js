@@ -351,11 +351,9 @@ async function findPages(title, quick) {
 async function loadAnswers(auto) {
   if (state.loading) return;
   const title = $("titleInput").value.trim();
-  const markerRaw = $("markerInput").value.trim();
   if (!title) { setStatus("Bitte einen Seitentitel eingeben.", true); return; }
-  if (!markerRaw) { setStatus("Bitte die erste Zeile des Antwortfelds angeben.", true); return; }
   LS.set("aue.title", title);
-  LS.set("aue.marker", markerRaw);
+  LS.set("aue.tasks", $("markerInput").value.trim());
 
   state.loading = true;
   $("loadBtn").disabled = true;
@@ -363,7 +361,6 @@ async function loadAnswers(auto) {
   try {
     const before = graphRequests;
     const found = await findPages(title, auto === true);
-    const markerBase = norm(markerRaw).replace(/[:\s]+$/, "");
     const changed = [...found.values()].filter((p) => {
       const c = state.contentCache.get(p.id);
       return !c || c.modified !== p.lastModifiedDateTime;
@@ -378,15 +375,10 @@ async function loadAnswers(auto) {
         cached = { modified: page.lastModifiedDateTime, html: fresh };
         state.contentCache.set(page.id, cached);
       }
-      const html = cached.html;
-      const { fields, taskText } = evaluateHtml(html, markerBase);
-      for (const f of fields) {
-        f.images = (await Promise.all(f.imageSrcs.slice(0, 4).map(loadImage))).filter(Boolean);
-      }
-      return { name: s.name, page, fields, taskText, status: statusOf(fields) };
+      return { name: s.name, page, html: cached.html, fields: [] };
     });
     state.title = title;
-    buildFieldOptions();
+    await evaluateAll();
     const time = new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
     const n = graphRequests - before;
     setStatus(`Stand: ${time} Uhr · ${n} ${n === 1 ? "Abfrage" : "Abfragen"} an Microsoft`);
@@ -400,55 +392,188 @@ async function loadAnswers(auto) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Aufgaben-Auswahl                                                    */
+/* ------------------------------------------------------------------ */
+
+// "1) 2), 3a)  B)" → { tokens: {"1","2","3a","B"}, all: false, lower: true }
+// Einzelne Buchstaben unterscheiden Groß/klein: "B)" ist Teil B, "b)" eine Unteraufgabe.
+function parseTasks(input) {
+  const tokens = new Set(
+    (input || "").split(/[\s,;]+/)
+      .map((t) => t.replace(/^\(/, "").replace(/[).:]+$/, ""))
+      .filter((t) => /^(\d{1,2}[a-zA-Z]?|[a-zA-Z])$/.test(t))
+      .map((t) => (/^\d/.test(t) ? t.toLowerCase() : t))
+  );
+  return { tokens, all: tokens.size === 0, lower: [...tokens].some((t) => /[a-z]/.test(t)) };
+}
+
+function sameTask(t, x) {
+  return /^[a-zA-Z]$/.test(t) ? t === x : t.toLowerCase() === (x || "").toLowerCase();
+}
+
+function matchesSelection(f, sel) {
+  if (sel.all) return true;
+  for (const t of sel.tokens) {
+    if (sameTask(t, f.display) || sameTask(t, f.own)) return true;
+    // "b)" getippt, auf der Seite gibt es aber nur "B)" (oder umgekehrt) → trotzdem zeigen
+    if (/^[a-zA-Z]$/.test(t) && !(state.detectedOwn || new Set()).has(t) &&
+        f.own.toLowerCase() === t.toLowerCase() && f.display === f.own) return true;
+  }
+  return false;
+}
+
+// Wertet alle geladenen Seiten (neu) aus. Braucht keine Abfragen an Microsoft –
+// deshalb geht das Umschalten der Aufgaben sofort.
+async function evaluateAll() {
+  const sel = parseTasks($("markerInput").value);
+  const detected = new Map();
+  state.detectedOwn = new Set();
+  const withPage = state.results.filter((r) => r.html);
+  withPage.forEach((r) => {
+    const p = parsePage(r.html, sel);
+    r.allFields = p.fields;
+    r.taskText = p.taskText;
+    r.fbBoxes = p.fbBoxes;
+    p.fields.forEach((f) => { if (!detected.has(f.display)) detected.set(f.display, f); state.detectedOwn.add(f.own); });
+  });
+  stripTemplate(withPage);
+
+  // "3)" mit Unteraufgaben "3a)", "3b)": Hat bei 3) niemand etwas Eigenes geschrieben,
+  // ist es nur die Überschrift → nicht als eigene Aufgabe zählen.
+  const keys = new Set(); withPage.forEach((r) => r.allFields.forEach((f) => keys.add(f.key)));
+  const parents = [...keys].filter((k) => /^\d/.test(k) && [...keys].some((x) => x !== k && x.startsWith(k) && /^[a-z]/.test(x.slice(k.length))));
+  parents.forEach((k) => {
+    const all = withPage.flatMap((r) => r.allFields.filter((f) => f.key === k));
+    if (all.every((f) => !f.content.length && !f.imageSrcs.length)) {
+      withPage.forEach((r) => { r.allFields = r.allFields.filter((f) => f.key !== k); });
+    }
+  });
+
+  for (const r of withPage) {
+    r.fields = r.allFields.filter((f) => matchesSelection(f, sel));
+    r.fields.forEach((f) => {
+      f.text = f.content.join("\n");
+      f.status = f.text || f.imageSrcs.length || f.extras.length ? "ok" : "leer";
+    });
+    assignFeedbackBoxes(r.fields, r.fbBoxes);
+    r.status = statusOf(r.fields);
+    for (const f of r.fields) {
+      f.images = (await Promise.all(f.imageSrcs.slice(0, 4).map(loadImage))).filter(Boolean);
+    }
+  }
+  state.detected = [...detected.keys()];
+  buildTaskChips(sel);
+  buildFieldOptions();
+}
+
+// Kennzeichen, die auf den Seiten gefunden wurden, als Tipp-Knöpfe
+function buildTaskChips(sel) {
+  const box = $("taskChips");
+  if (!state.detected || !state.detected.length) { box.hidden = true; return; }
+  box.hidden = false;
+  box.innerHTML = `<span class="note">Auf der Seite gefunden:</span>` + state.detected.map((d) => {
+    const on = !sel.all && [...sel.tokens].some((t) => sameTask(t, d));
+    return `<button type="button" class="chip${on ? " on" : ""}" data-task="${esc(d)}">${esc(d)})</button>`;
+  }).join("") + (sel.all ? "" : `<button type="button" class="chip clear" data-task="">alle</button>`);
+}
+
+function toggleTask(d) {
+  const input = $("markerInput");
+  if (!d) { input.value = ""; }
+  else {
+    const sel = parseTasks(input.value);
+    const hit = [...sel.tokens].find((t) => sameTask(t, d));
+    if (hit) sel.tokens.delete(hit); else sel.tokens.add(d);
+    // Reihenfolge wie auf der Seite
+    const order = state.detected || [];
+    const pos = (t) => { const i = order.findIndex((x) => sameTask(t, x)); return i < 0 ? 999 : i; };
+    const list = [...sel.tokens].sort((a, b) => pos(a) - pos(b));
+    input.value = list.map((t) => (order.find((x) => sameTask(t, x)) || t) + ")").join(" ");
+  }
+  LS.set("aue.tasks", input.value.trim());
+  reevaluate();
+}
+
+async function reevaluate() {
+  if (!state.results.length || state.loading) return;
+  try { await evaluateAll(); render(); } catch (e) { handleError(e); }
+}
+
+/* ------------------------------------------------------------------ */
 /* Seiteninhalt auswerten                                              */
 /* ------------------------------------------------------------------ */
 
 function clean(s) { return (s || "").replace(/\s+/g, " ").trim(); }
 
-// Liest die Textzeilen aus einem Textfeld (Container) der Seite
+function letterOf(n, upper) {
+  let s = "";
+  for (n = Math.max(1, n); n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(97 + ((n - 1) % 26)) + s;
+  return upper ? s.toUpperCase() : s;
+}
+
+// Liest ein Textfeld der Seite der Reihe nach aus: Zeilen (mit Element-ID), Bilder, Sonstiges
 function collect(root) {
-  const lines = [];
-  const extras = new Set();
-  const images = [];
-  const addImg = (img) => {
-    const src = img.getAttribute("src") || img.getAttribute("data-fullres-src");
-    if (src) images.push(src);
+  const items = [];
+  const line = (text, el) => { const t = clean(text); if (t) items.push({ kind: "line", text: t, id: (el && el.getAttribute("id")) || "" }); };
+  const img = (el) => {
+    const src = el.getAttribute("src") || el.getAttribute("data-fullres-src");
+    if (src) items.push({ kind: "img", src, id: el.getAttribute("id") || "" });
+  };
+  const walkList = (list) => {
+    const ordered = list.tagName === "OL";
+    let n = parseInt(list.getAttribute("start"), 10) || 1;
+    for (const li of list.children) {
+      if (li.tagName !== "LI") { walk(li); continue; }
+      const v = parseInt(li.getAttribute("value"), 10);
+      if (v) n = v;
+      const style = ((li.getAttribute("style") || "") + ";" + (list.getAttribute("style") || "")).toLowerCase();
+      let prefix = "• ";
+      if (ordered) {
+        const lab = /lower-(alpha|latin)/.test(style) ? letterOf(n, false)
+          : /upper-(alpha|latin)/.test(style) ? letterOf(n, true) : String(n);
+        prefix = lab + ") ";
+      }
+      const c = li.cloneNode(true);
+      c.querySelectorAll("ul,ol").forEach((x) => x.remove());
+      line(prefix + c.textContent, li);
+      li.querySelectorAll(":scope > img, :scope > p > img").forEach(img);
+      li.querySelectorAll(":scope > ul, :scope > ol").forEach(walkList);
+      n++;
+    }
   };
   const walk = (el) => {
     for (const n of el.childNodes) {
-      if (n.nodeType === 3) { const t = clean(n.textContent); if (t) lines.push(t); continue; }
+      if (n.nodeType === 3) { line(n.textContent, null); continue; }
       if (n.nodeType !== 1) continue;
       const tag = n.tagName;
       if (/^(P|H[1-6])$/.test(tag)) {
-        const t = clean(n.textContent);
-        if (t) lines.push(t);
-        n.querySelectorAll("img").forEach(addImg);
-      } else if (tag === "LI") {
-        const c = n.cloneNode(true);
-        c.querySelectorAll("ul,ol").forEach((x) => x.remove());
-        const t = clean(c.textContent);
-        if (t) lines.push("• " + t);
-        n.querySelectorAll(":scope > ul, :scope > ol").forEach(walk);
+        line(n.textContent, n);
+        n.querySelectorAll("img").forEach(img);
+      } else if (tag === "OL" || tag === "UL") {
+        walkList(n);
       } else if (tag === "TABLE") {
-        extras.add("Tabelle");
+        items.push({ kind: "extra", what: "Tabelle" });
         n.querySelectorAll("tr").forEach((tr) => {
           const cells = [...tr.children].map((td) => clean(td.textContent)).filter(Boolean);
-          if (cells.length) lines.push(cells.join(" | "));
+          if (cells.length) items.push({ kind: "line", text: cells.join(" | "), id: n.getAttribute("id") || "" });
         });
       } else if (tag === "IMG") {
-        addImg(n);
+        img(n);
       } else if (tag === "OBJECT" || tag === "IFRAME") {
-        extras.add("Anhang");
+        items.push({ kind: "extra", what: "Anhang" });
       } else if (tag !== "BR" && tag !== "SCRIPT" && tag !== "STYLE") {
         walk(n);
       }
     }
   };
   walk(root);
-  return { lines, extras: [...extras], images };
+  return items;
 }
 
-// Prüft, ob eine Zeile ein Antwortfeld einleitet: "Answer:", "Answer a:", "Answer 2: Text" …
+// Erkennt Aufgabenkennzeichen am Zeilenanfang: "1)", "(2)", "3a)", "B)", "c)"
+const TASK_RE = /^\(?(\d{1,2}[a-zA-Z]?|[a-zA-Z])\)\s*(.*)$/;
+
+// Prüft, ob eine Zeile ein Feedback-Feld einleitet: "Feedback:", "Feedback 2):", "Feedback b:" …
 function matchMarker(line, base) {
   if (!norm(line).startsWith(base)) return null;
   const rest = clean(line).slice(base.length);
@@ -456,9 +581,11 @@ function matchMarker(line, base) {
   if (colon >= 0 && colon <= 12) {
     return { label: rest.slice(0, colon).trim(), answer: rest.slice(colon + 1).trim() };
   }
-  if (/^[\p{L}\p{N}]/u.test(rest)) return null; // z. B. "Answering …" ist kein Feld
+  if (/^[\p{L}\p{N}]/u.test(rest)) return null;
   return { label: "", answer: rest.trim() };
 }
+
+const labelKey = (s) => (s || "").replace(/[()\s.]/g, "").toLowerCase();
 
 // Position eines Textfelds auf der Seite (für die Reihenfolge von oben nach unten)
 function posOf(el) {
@@ -470,8 +597,9 @@ function posOf(el) {
   return { top: get("top"), left: get("left") };
 }
 
-// Liefert alle Antwortfelder der Seite, sortiert von oben nach unten
-function evaluateHtml(html, markerBase) {
+// Zerlegt eine Seite in Aufgaben. Eine Aufgabe beginnt mit ihrem Kennzeichen und reicht
+// bis zum nächsten Kennzeichen oder bis zum Ende des Textfelds.
+function parsePage(html, sel) {
   const doc = new DOMParser().parseFromString(html, "text/html");
   let boxes = [...doc.body.children].filter((e) => e.tagName === "DIV");
   if (!boxes.length) boxes = [doc.body];
@@ -480,80 +608,165 @@ function evaluateHtml(html, markerBase) {
     .sort((a, b) => a.top - b.top || a.left - b.left || a.i - b.i)
     .map((b) => b.el);
 
+  // Großbuchstaben (Teil A, B …) und Zahlen zählen immer als Aufgabe. Kleinbuchstaben nur,
+  // wenn alle oder Unteraufgaben gewählt sind – sonst bleiben z. B. Auswahlmöglichkeiten
+  // "a) … b) …" Teil der Aufgabe.
+  const useLower = sel.all || sel.lower;
   const fields = [];
   const taskLines = [];
-  const fbBoxes = [];   // Textfelder auf der Vorlage, die mit "Feedback:" beginnen
+  const fbBoxes = [];
+  let lastNum = "", lastUpper = "";
+
   for (const box of boxes) {
-    const { lines, extras, images } = collect(box);
-    if (!lines.length) continue;
-    const m = matchMarker(lines[0], markerBase);
-    if (!m) {
-      const fb = markerBase !== "feedback" && matchMarker(lines[0], "feedback");
-      if (fb) {
-        fbBoxes.push({
-          label: fb.label, id: box.getAttribute("id") || "",
-          lines: (fb.answer ? [fb.answer] : []).concat(lines.slice(1)),
-        });
-      } else {
-        taskLines.push(...lines);
-      }
+    const items = collect(box);
+    const firstLine = items.find((x) => x.kind === "line");
+    const boxId = box.getAttribute("id") || "";
+
+    // Eigenes Feedback-Feld der Vorlage
+    const fb = firstLine && matchMarker(firstLine.text, "feedback");
+    if (fb) {
+      const lines = items.filter((x) => x.kind === "line").map((x) => x.text);
+      lines[0] = fb.answer;
+      fbBoxes.push({ label: fb.label, id: boxId, lines: lines.filter(Boolean) });
       continue;
     }
-    // Bereits eingetragenes Feedback gehört nicht zur Antwort
-    let body = lines.slice(1);
-    let existingFeedback = "";
-    const fi = body.findIndex(isFeedbackLine);
-    if (fi >= 0) {
-      existingFeedback = body.slice(fi).join("\n").replace(/^💬\s*feedback:\s*/i, "");
-      body = body.slice(0, fi);
+
+    let cur = null;
+    for (const it of items) {
+      if (it.kind === "line") {
+        const m = TASK_RE.exec(it.text);
+        const isNum = m && /^\d/.test(m[1]);
+        const isUpper = m && !isNum && m[1] !== m[1].toLowerCase();
+        if (m && (isNum || isUpper || useLower)) {
+          const own = m[1];
+          let display = own;
+          if (isNum) { lastNum = own; }
+          else if (own === own.toLowerCase()) { display = (lastNum || "") + own; }
+          else { lastUpper = own; }
+          cur = {
+            own, display, upper: lastUpper, isNum, boxId, lastId: it.id,
+            raw: m[2] ? [m[2]] : [], imageSrcs: [], extras: [], existingFeedback: "", inFeedback: false,
+          };
+          fields.push(cur);
+          continue;
+        }
+        if (!cur) { taskLines.push(it.text); continue; }
+        if (it.id) cur.lastId = it.id;
+        if (cur.inFeedback || isFeedbackLine(it.text)) {
+          cur.inFeedback = true;
+          cur.existingFeedback += (cur.existingFeedback ? "\n" : "") + it.text.replace(/^💬\s*feedback:\s*/i, "");
+        } else {
+          cur.raw.push(it.text);
+        }
+      } else if (cur) {
+        if (it.id) cur.lastId = it.id;
+        if (it.kind === "img") cur.imageSrcs.push(it.src);
+        else if (!cur.extras.includes(it.what)) cur.extras.push(it.what);
+      }
     }
-    const text = (m.answer ? [m.answer] : []).concat(body).join("\n");
-    fields.push({
-      label: m.label, text, extras, imageSrcs: images, existingFeedback,
-      targetId: box.getAttribute("id") || "",
-      status: text || extras.length || images.length ? "ok" : "leer",
-    });
   }
-  fields.forEach((f, i) => {
-    f.key = f.label ? "L:" + norm(f.label) : "N:" + (i + 1);
-    f.display = f.label || String(i + 1);
-    f.fbTarget = f.targetId;   // Standard: unter die Antwort
-    f.fbBox = null;            // "dedicated" | "shared" wenn ein Feedback-Feld genutzt wird
+
+  // Doppelte Nummern (z. B. "A) 1) 2)  B) 1) 2)") mit dem Großbuchstaben davor unterscheiden
+  const count = new Map();
+  fields.forEach((f) => count.set(f.display, (count.get(f.display) || 0) + 1));
+  fields.forEach((f) => { if (f.isNum && count.get(f.display) > 1 && f.upper) f.display = f.upper + f.display; });
+  const seen = new Map();
+  fields.forEach((f) => {
+    const n = (seen.get(f.display) || 0) + 1;
+    seen.set(f.display, n);
+    f.key = n > 1 ? `${f.display}~${n}` : f.display;
+    f.label = f.display;
+    f.content = f.raw.slice();
+    f.task = "";
+    f.fbTarget = f.lastId || f.boxId;      // Standard: direkt unter die Antwort
+    f.fbAction = f.lastId ? "insert" : "append";
+    f.fbBox = null;
   });
-  assignFeedbackBoxes(fields, fbBoxes);
-  return { fields, taskText: taskLines.join("\n").slice(0, 3000) };
+  return { fields, fbBoxes, taskText: taskLines.join("\n").slice(0, 3000) };
 }
 
-// Ordnet jedem Antwortfeld ein Feedback-Feld der Vorlage zu:
-//  "Feedback a:" ↔ "Answer a:"; sonst der Reihe nach; gibt es nur eins, teilen sich alle Antworten dieses Feld.
+// Aufgabentext der Vorlage erkennen: Zeilen am Anfang einer Aufgabe, die bei (fast) allen
+// Schüler:innen gleich sind, sind der Aufgabentext – nicht die Antwort.
+function stripTemplate(results) {
+  const groups = new Map();
+  results.forEach((r) => r.allFields.forEach((f) => {
+    if (!groups.has(f.key)) groups.set(f.key, []);
+    groups.get(f.key).push(f);
+  }));
+  for (const list of groups.values()) {
+    list.forEach((f) => { f.content = f.raw.slice(); f.task = ""; });
+    if (list.length < 3) continue;
+    const need = Math.max(3, Math.ceil(list.length * 0.6));
+    let active = list;
+    const taskLines = [];
+    for (let j = 0; active.length; j++) {
+      const freq = new Map();
+      active.forEach((f) => { const t = f.raw[j]; if (t !== undefined) { const k = norm(t); freq.set(k, (freq.get(k) || 0) + 1); } });
+      let best = "", bestN = 0;
+      freq.forEach((n, k) => { if (n > bestN) { best = k; bestN = n; } });
+      if (bestN < need) break;
+      // Wer direkt hinter den Aufgabentext geschrieben hat: nur den Teil danach als Antwort
+      active.forEach((f) => {
+        const t = f.raw[j];
+        if (t !== undefined && norm(t) !== best && norm(t).startsWith(best + " ")) {
+          f.content = [t.slice(best.length).trim()].concat(f.raw.slice(j + 1));
+        }
+      });
+      active = active.filter((f) => f.raw[j] !== undefined && norm(f.raw[j]) === best);
+      taskLines.push(active[0].raw[j]);
+      active.forEach((f) => { f.content = f.raw.slice(j + 1); });
+    }
+    // Vorgegebene Zeilen wie "b) I ___ (go) …" mitten in der Aufgabe: kommen sie bei den
+    // meisten gleich vor und beginnen mit einem Kennzeichen, gehören sie zur Vorlage.
+    const freqAll = new Map();
+    list.forEach((f) => new Set(f.raw.map(norm)).forEach((k) => freqAll.set(k, (freqAll.get(k) || 0) + 1)));
+    const tmpl = new Set([...freqAll].filter(([k, n]) => n >= need && TASK_RE.test(k)).map(([k]) => k));
+    if (tmpl.size) {
+      list.forEach((f) => { f.content = f.content.filter((l) => !tmpl.has(norm(l))); });
+      list[0].raw.forEach((l) => { if (tmpl.has(norm(l)) && !taskLines.includes(l)) taskLines.push(l); });
+    }
+    const task = taskLines.join("\n");
+    list.forEach((f) => { f.task = task; });
+  }
+}
+
+// Ordnet jeder Aufgabe ein Feedback-Feld der Vorlage zu:
+//  "Feedback 2):" ↔ "2)"; sonst der Reihe nach; gibt es nur eins, teilen sich alle Aufgaben dieses Feld.
 function assignFeedbackBoxes(fields, boxes) {
-  boxes = boxes.filter((b) => b.id);
+  boxes = (boxes || []).filter((b) => b.id);
+  fields.forEach((f) => {
+    f.fbTarget = f.lastId || f.boxId;
+    f.fbAction = f.lastId ? "insert" : "append";
+    f.fbBox = null;
+  });
   if (!boxes.length || !fields.length) return;
   const used = new Set();
   const open = [];
   fields.forEach((f) => {
-    const b = f.label && boxes.find((x) => !used.has(x) && x.label && norm(x.label) === norm(f.label));
+    const b = boxes.find((x) => !used.has(x) && x.label &&
+      (labelKey(x.label) === labelKey(f.display) || labelKey(x.label) === labelKey(f.own)));
     if (b) { used.add(b); useBox(f, b, "dedicated"); } else open.push(f);
   });
-  const rest = boxes.filter((b) => !used.has(b));
+  const rest = boxes.filter((b) => !used.has(b) && !b.label);
   if (!open.length) return;
   if (rest.length === open.length) {
     open.forEach((f, i) => useBox(f, rest[i], "dedicated"));
-  } else if (boxes.length === 1) {
-    open.forEach((f) => useBox(f, boxes[0], fields.length > 1 ? "shared" : "dedicated"));
+  } else if (rest.length === 1) {
+    open.forEach((f) => useBox(f, rest[0], fields.length > 1 ? "shared" : "dedicated"));
   }
 }
 
 function useBox(f, box, kind) {
   f.fbTarget = box.id;
+  f.fbAction = "append";
   f.fbBox = kind;
   const strip = (l) => l.replace(/^💬\s*feedback:\s*/i, "");
   if (kind === "dedicated") {
     f.existingFeedback = box.lines.map(strip).join("\n");
   } else {
-    const prefix = norm(f.display) + ")";
-    const own = box.lines.filter((l) => norm(l).startsWith(prefix));
-    f.existingFeedback = own.map((l) => clean(l).slice(prefix.length).trim()).join("\n");
+    const prefix = labelKey(f.display);
+    const own = box.lines.map((l) => TASK_RE.exec(clean(l))).filter((m) => m && labelKey(m[1]) === prefix);
+    f.existingFeedback = own.map((m) => m[2]).join("\n");
   }
 }
 
@@ -587,8 +800,8 @@ function buildFieldOptions() {
   state.results.forEach((r) => (r.fields || []).forEach((f) => { if (!keys.has(f.key)) keys.set(f.key, f.display); }));
   const sel = $("fieldSel");
   const prev = sel.value;
-  sel.innerHTML = `<option value="">Alle Felder</option>` +
-    [...keys].map(([k, d]) => `<option value="${esc(k)}">Feld ${esc(d)}</option>`).join("");
+  sel.innerHTML = `<option value="">Alle Aufgaben</option>` +
+    [...keys].map(([k, d]) => `<option value="${esc(k)}">Aufgabe ${esc(d)})</option>`).join("");
   sel.value = keys.has(prev) ? prev : "";
   $("fieldWrap").hidden = keys.size < 2;
 }
@@ -606,7 +819,7 @@ function badgeText(v) {
     case "ok": return "beantwortet";
     case "teilweise": return `${v.fields.filter((f) => f.status === "ok").length}/${v.fields.length} beantwortet`;
     case "leer": return "noch nichts";
-    case "kein-feld": return "Feld fehlt";
+    case "kein-feld": return "nicht gefunden";
     default: return "Seite fehlt";
   }
 }
@@ -633,7 +846,7 @@ function render() {
   $("results").innerHTML = shown.map(({ r, v }) => {
     const multi = v.fields.length > 1 || (r.fields && r.fields.length > 1 && v.fields.length === 1);
     const body = v.fields.map((f) => `<div class="field ${f.status}">
-        ${multi ? `<div class="flabel">Feld ${esc(f.display)}</div>` : ""}
+        ${multi ? `<div class="flabel">Aufgabe ${esc(f.display)})</div>` : ""}
         ${f.text ? `<p class="answer">${esc(f.text)}</p>` : ""}
         ${(f.images || []).length ? `<div class="thumbs">${f.images.map((u) => `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="Bild von ${esc(r.name)}"></a>`).join("")}</div>` : ""}
         ${f.extras.length ? `<div class="note">📎 Enthält: ${esc(f.extras.join(", "))}</div>` : ""}
@@ -643,7 +856,7 @@ function render() {
 
     const notes = [];
     if (v.status === "leer") notes.push("Falls mit dem Stift direkt auf die Seite geschrieben: Diese Handschrift wird hier nicht angezeigt – bitte Seite öffnen.");
-    if (v.status === "kein-feld") notes.push("Antwortfeld nicht gefunden – evtl. gelöscht oder erste Zeile verändert.");
+    if (v.status === "kein-feld") notes.push("Keine der gewählten Aufgaben auf dieser Seite gefunden – evtl. Kennzeichen gelöscht oder verändert.");
     if (v.status === "keine-seite") notes.push("Seite bei dieser Person nicht gefunden (umbenannt?).");
     if (r.page && r.page.lastModifiedDateTime) {
       const d = new Date(r.page.lastModifiedDateTime);
@@ -702,7 +915,13 @@ async function init() {
   }, 120000);
 
   $("titleInput").value = LS.get("aue.title") || "";
-  $("markerInput").value = LS.get("aue.marker") || "Answer:";
+  $("markerInput").value = LS.get("aue.tasks") || "";
+  $("markerInput").addEventListener("change", () => { LS.set("aue.tasks", $("markerInput").value.trim()); reevaluate(); });
+  $("markerInput").addEventListener("keydown", (e) => { if (e.key === "Enter") e.target.blur(); });
+  $("taskChips").addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-task]");
+    if (b) toggleTask(b.dataset.task);
+  });
 
   if (!CFG.clientId || CFG.clientId.startsWith("HIER") || !CFG.tenantId || CFG.tenantId.startsWith("HIER")) {
     setStatus("Bitte zuerst in config.js die Client-ID und Tenant-ID eintragen (siehe README).", true);

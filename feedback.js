@@ -117,7 +117,7 @@ function feedbackHtml(r, f) {
       </div>
       ${st.state !== "saved" ? `<div class="note">${f.fbBox
         ? "Wird ins Feld „Feedback:“ auf der Seite eingetragen."
-        : "Wird unter die Antwort gesetzt. Tipp: Ein Textfeld „Feedback:“ auf der Vorlage verhindert, dass es anderen Text überdeckt."}</div>` : ""}
+        : "Wird direkt unter die Antwort gesetzt. Tipp: Ein Textfeld „Feedback:“ auf der Vorlage verhindert, dass es anderen Text überdeckt."}</div>` : ""}
     </div>`;
 }
 
@@ -158,7 +158,10 @@ ${r.taskText || "(kein weiterer Text auf der Seite)"}
 Hinweise / Erwartungshorizont der Lehrkraft:
 ${crit || "(keine)"}
 
-${r.fields.length > 1 ? `Es geht um Antwortfeld ${f.display}.\n\n` : ""}Antwort der Schülerin / des Schülers:
+Aufgabe ${f.display}):
+${f.task || "(Aufgabentext siehe oben)"}
+
+Antwort der Schülerin / des Schülers:
 ${f.text}`;
   return { system, user };
 }
@@ -319,7 +322,7 @@ async function saveFeedback(k) {
     await graph(`${state.base}/pages/${r.page.id}/content`, "none", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify([{ target: f.fbTarget, action: "append", content: html }]),
+      body: JSON.stringify([{ target: f.fbTarget, action: f.fbAction || "append", position: "after", content: html }]),
     });
     st.state = "saved";
     f.existingFeedback = st.text;

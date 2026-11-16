@@ -32,14 +32,15 @@
         <input id="titleInput" list="titleList" placeholder="z. B. Aufgabe 3" autocomplete="off" disabled>
         <datalist id="titleList"></datalist>
       </label>
-      <label>Erste Zeile des Antwortfelds
-        <input id="markerInput" value="Answer:" autocomplete="off">
+      <label>Aufgaben anzeigen (leer = alle)
+        <input id="markerInput" placeholder="z. B. 1) 2) 3a) B)" autocomplete="off" autocapitalize="off">
       </label>
     </div>
+    <div id="taskChips" class="chips" hidden></div>
     <div class="actions">
       <button id="loadBtn" type="button" class="primary" disabled>Antworten laden</button>
       <label class="check"><input id="onlyMissing" type="checkbox"> Nur Fehlende</label>
-      <label id="fieldWrap" class="check" hidden>Feld <select id="fieldSel"></select></label>
+      <label id="fieldWrap" class="check" hidden>Nur <select id="fieldSel"></select></label>
       <button id="fbAllBtn" type="button" class="secondary" hidden>✨ Feedback für alle</button>
       <label class="check"><input id="autoRefresh" type="checkbox"> Alle 2 Minuten aktualisieren</label>
     </div>

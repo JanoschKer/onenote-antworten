@@ -114,3 +114,10 @@ button.secondary { min-height: 44px; }
 .fb-error { font-size: 13px; color: var(--missing); }
 
 [hidden] { display: none !important; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+.chips .note { margin-right: 4px; }
+.chip { font: inherit; font-size: 14px; font-weight: 600; min-height: 36px; min-width: 44px; padding: 0 10px;
+  border-radius: 18px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
+.chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-fg); }
+.chip.clear { color: var(--accent); border-style: dashed; }
